@@ -46,7 +46,7 @@
   <ItemGroup>
     <Compile Include="JsonClient.cs" />
     <Compile Include="JsonServer.cs" />
-    <Compile Include="PacketReceivedEventArgs.cs" />
+    <Compile Include="Packet.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="Utils.cs" />
   </ItemGroup>

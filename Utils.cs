@@ -4,15 +4,14 @@ namespace TcpJsonLibrary
 {
 	public static class Utils
 	{
-		public static bool ParsePacket(string data, out PacketReceivedEventArgs e)
+		public static bool ParsePacket(string data, out Packet packet)
 		{
-			e = default(PacketReceivedEventArgs);
+			packet = default(Packet);
 			try
 			{
 				int splitIndex = data.IndexOf('|');
-				int id = int.Parse(data.Substring(0, splitIndex));
-				dynamic json = JsonConvert.DeserializeObject(data.Substring(splitIndex + 1));
-				e = new PacketReceivedEventArgs(id, json);
+				string key = data.Substring(0, splitIndex);
+				packet = new Packet(key, JsonConvert.DeserializeObject(data.Substring(splitIndex + 1)));
 				return true;
 			}
 			catch { return false; }
