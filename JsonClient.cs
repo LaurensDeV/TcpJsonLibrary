@@ -13,6 +13,7 @@ namespace TcpJsonLibrary
 		public const int BUFFER_SIZE = 65536;
 		public byte[] buffer = new byte[BUFFER_SIZE];
 		public NetworkStream networkStream => tcpClient.GetStream();
+		public bool Connected => tcpClient.Connected;
 		private Dictionary<string, Queue<Action<dynamic>>> Callbacks;
 		private Dictionary<string, Action<dynamic>> OnPacketAction;
 
@@ -128,6 +129,7 @@ namespace TcpJsonLibrary
 		public void Dispose()
 		{
 			tcpClient.Close();
+			Callbacks.Clear();
 			ClientDisconnected?.Invoke(this);
 		}
 	}
