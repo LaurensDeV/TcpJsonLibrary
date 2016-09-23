@@ -1,21 +1,22 @@
 ﻿using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Net.Sockets;
-using System.Text;
 using System.Threading.Tasks;
 
 namespace TcpJsonLibrary
 {
-	public class JsonClient : IDisposable
+	public class JsonClient : TcpClient, IDisposable
 	{
-		public TcpClient tcpClient { get; private set; }
-		public const int BUFFER_SIZE = 65536;
-		public byte[] buffer = new byte[BUFFER_SIZE];
-		public NetworkStream networkStream => tcpClient.GetStream();
-		public bool Connected => tcpClient.Connected;
+		public const int BUFFER_SIZE = 1024;
+		private byte[] buffer;
+		private byte[] lenBuffer;
+		private NetworkStream networkStream => GetStream();
 		private Dictionary<string, Queue<Action<dynamic>>> Callbacks;
 		private Dictionary<string, Action<dynamic>> OnPacketAction;
+		public Func<string, string> encryption = null;
+		public Func<string, string> decryption = null; 
 
 		public delegate void ClientDisconnectedEventHandler(JsonClient e);
 		public event ClientDisconnectedEventHandler ClientDisconnected;
@@ -24,96 +25,150 @@ namespace TcpJsonLibrary
 
 		public JsonClient(TcpClient client) : this()
 		{
-			this.tcpClient = client;
-			if (client.Connected)
-				networkStream.BeginRead(buffer, 0, buffer.Length, ReadCallback, null);
+			Client = client.Client;
+			if (Connected)
+				networkStream.BeginRead(lenBuffer, 0, lenBuffer.Length, ReceiveCallback, null);
 		}
 
 		public JsonClient()
 		{
+			buffer = new byte[BUFFER_SIZE];
+			lenBuffer = new byte[4];
 			OnPacketAction = new Dictionary<string, Action<dynamic>>();
 			Callbacks = new Dictionary<string, Queue<Action<dynamic>>>();
-			tcpClient = new TcpClient();
 		}
 
-		public bool Connect(string hostname, int port)
+		public new async Task ConnectAsync(string hostname, int port)
 		{
-			try
+			await base.ConnectAsync(hostname, port).ContinueWith((o) =>
 			{
-				tcpClient = new TcpClient(hostname, port);
-				return true;
-			}
-			catch { return false; }
+				if (Connected)
+					networkStream.BeginRead(lenBuffer, 0, lenBuffer.Length, ReceiveCallback, null);
+			});
 		}
 
-		public async Task<bool> ConnectAsync(string hostname, int port)
+		public new void Connect(string hostname, int port)
 		{
-			try
-			{
-				return await Task.Run(async () =>
-				{
-					return await tcpClient.ConnectAsync(hostname, port).ContinueWith((o) =>
-					{
-						networkStream.BeginRead(buffer, 0, buffer.Length, ReadCallback, null);
-						return tcpClient.Connected;
-					});
-				});
-			}
-			catch { return false; }
+			base.Connect(hostname, port);
+			networkStream.BeginRead(lenBuffer, 0, lenBuffer.Length, ReceiveCallback, null);
 		}
 
-		private void ReadCallback(IAsyncResult ar)
+		public void SetEncryption(Func<string, string> method)
+		{
+			encryption = method;
+		}
+
+		public void SetDecryption(Func<string, string> method)
+		{
+			decryption = method;
+		}
+
+		private void ReceiveCallback(IAsyncResult ar)
 		{
 			try
 			{
 				int len = networkStream.EndRead(ar);
 				if (len <= 0)
 				{
-					Dispose();
+					Close();
 					return;
 				}
-				byte[] data = new byte[len];
-				Array.Copy(buffer, data, len);
-				Array.Clear(buffer, 0, BUFFER_SIZE);
-				string packetStr = UTF8Encoding.UTF8.GetString(data);
-
-				Packet packet;
-				if (Utils.ParsePacket(packetStr, out packet))
-				{
-					if (Callbacks.ContainsKey(packet.Key))
-					{
-						Action<dynamic> callback = Callbacks[packet.Key].Dequeue();
-						callback.Invoke(packet.Data);
-					}
-					else if (OnPacketAction.ContainsKey(packet.Key))
-						OnPacketAction[packet.Key].Invoke(packet.Data);
-				}
-				networkStream.BeginRead(buffer, 0, BUFFER_SIZE, ReadCallback, null);
+				int toReceive = BitConverter.ToInt32(lenBuffer, 0);
+				ReceivePacket(new MemoryStream(), toReceive);
 			}
-			catch { Dispose(); }
+			catch { Close(); }
 		}
 
-		public void On(string key, Action<dynamic> action, dynamic callback = null)
+		private void ReceivePacket(MemoryStream ms, int toReceive)
 		{
-			if (OnPacketAction.ContainsKey(key))
-				OnPacketAction[key] = action;
-			else
-				OnPacketAction.Add(key, action);
-			if (callback != null)
-				Emit(key, callback);
+			try
+			{
+				int len = networkStream.Read(buffer, 0, Math.Min(toReceive, buffer.Length));
+				if (len <= 0)
+				{
+					Close();
+					return;
+				}
+				toReceive -= len;
+				ms.Write(buffer, 0, len);
+				if (toReceive - len > 0)
+				{
+					ReceivePacket(ms, toReceive - len);
+					return;
+				}
+				ms.Position = 0L;
+
+				using (BinaryReader br = new BinaryReader(ms))
+				{
+					string key = br.ReadString();
+
+					string dataStr = br.ReadString();
+
+					if (decryption != null )
+						dataStr = decryption.Invoke(dataStr);
+
+					dynamic data = JsonConvert.DeserializeObject(dataStr);
+
+					lock (Callbacks)
+					{
+						if (Callbacks.ContainsKey(key))
+						{
+							Action<dynamic> callback = Callbacks[key].Dequeue();
+							callback.Invoke(data);
+						}
+						else if (OnPacketAction.ContainsKey(key))
+							OnPacketAction[key].Invoke(data);
+					}
+				}
+				ms.Close();
+			}
+			catch (SocketException) { Close(); }
+			catch (Exception) {  /*Don't handle*/ }
+			networkStream.BeginRead(lenBuffer, 0, lenBuffer.Length, ReceiveCallback, null);
+		}
+
+		public void On(string key, Action<dynamic> action)
+		{
+			lock (OnPacketAction)
+			{
+				if (OnPacketAction.ContainsKey(key))
+					OnPacketAction[key] = action;
+				else
+					OnPacketAction.Add(key, action);
+			}
 		}
 
 		public void Emit(string key, dynamic json, Action<dynamic> callback = null)
 		{
 			addCallback(key, callback);
-			string msg = $"{key}|{JsonConvert.SerializeObject(json)}";
-			byte[] byteArr = Encoding.UTF8.GetBytes(msg);
-			networkStream.BeginWrite(byteArr, 0, byteArr.Length, WriteCallback, null);
+
+			using (MemoryStream ms = new MemoryStream())
+			{
+				ms.Position = 4L;
+				using (BinaryWriter bw = new BinaryWriter(ms))
+				{
+					bw.Write(key);
+
+					string jsonStr = JsonConvert.SerializeObject(json);
+
+					if (encryption != null && decryption != null)
+						jsonStr = encryption.Invoke(jsonStr);
+
+					bw.Write(jsonStr);
+					ms.Position = 0L;
+					bw.Write((int)ms.Length);
+				}
+				byte[] byteArr = ms.ToArray();
+				networkStream.BeginWrite(byteArr, 0, byteArr.Length, WriteCallback, null);
+			}
 		}
 
 		private void addCallback(string key, Action<dynamic> callback)
 		{
-			if (callback != null)
+			if (callback == null)
+				return;
+
+			lock (Callbacks)
 			{
 				if (!Callbacks.ContainsKey(key))
 					Callbacks.Add(key, new Queue<Action<dynamic>>());
@@ -126,11 +181,14 @@ namespace TcpJsonLibrary
 			networkStream.EndWrite(ar);
 		}
 
+		public new void Close()
+		{			base.Close();
+			ClientDisconnected?.Invoke(this);
+		}
+
 		public void Dispose()
 		{
-			tcpClient.Close();
 			Callbacks.Clear();
-			ClientDisconnected?.Invoke(this);
 		}
 	}
 }
