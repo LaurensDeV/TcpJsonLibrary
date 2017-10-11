@@ -10,6 +10,7 @@ namespace Server
 		static List<JsonClient> clients;
 
 		static JsonServer server;
+
 		static void Main(string[] args)
 		{
 			clients = new List<JsonClient>();
@@ -26,7 +27,7 @@ namespace Server
 
 				foreach (var client in clients)
 				{
-					client.Emit("broadcast", new { Message = msg });
+					client.Emit("msg", new { Message = msg });
 				}
 			}
 		}
