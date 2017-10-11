@@ -15,8 +15,6 @@ namespace TcpJsonLibrary
 		private NetworkStream networkStream => GetStream();
 		private Dictionary<string, Queue<Action<dynamic>>> Callbacks;
 		private Dictionary<string, Action<dynamic>> OnPacketAction;
-		public Func<string, string> encryption = null;
-		public Func<string, string> decryption = null; 
 
 		public delegate void ClientDisconnectedEventHandler(JsonClient e);
 		public event ClientDisconnectedEventHandler ClientDisconnected;
@@ -51,16 +49,6 @@ namespace TcpJsonLibrary
 		{
 			base.Connect(hostname, port);
 			networkStream.BeginRead(lenBuffer, 0, lenBuffer.Length, ReceiveCallback, null);
-		}
-
-		public void SetEncryption(Func<string, string> method)
-		{
-			encryption = method;
-		}
-
-		public void SetDecryption(Func<string, string> method)
-		{
-			decryption = method;
 		}
 
 		private void ReceiveCallback(IAsyncResult ar)
@@ -103,9 +91,6 @@ namespace TcpJsonLibrary
 					string key = br.ReadString();
 
 					string dataStr = br.ReadString();
-
-					if (decryption != null )
-						dataStr = decryption.Invoke(dataStr);
 
 					dynamic data = JsonConvert.DeserializeObject(dataStr);
 
@@ -150,9 +135,6 @@ namespace TcpJsonLibrary
 					bw.Write(key);
 
 					string jsonStr = JsonConvert.SerializeObject(json);
-
-					if (encryption != null && decryption != null)
-						jsonStr = encryption.Invoke(jsonStr);
 
 					bw.Write(jsonStr);
 					ms.Position = 0L;

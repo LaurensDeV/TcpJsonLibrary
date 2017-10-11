@@ -1,12 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.IO;
-using System.Linq;
 using System.Net;
-using System.Net.Sockets;
-using System.Security.Cryptography;
-using System.Text;
-using System.Threading.Tasks;
 using TcpJsonLibrary;
 
 namespace Server
@@ -32,7 +26,7 @@ namespace Server
 
 				foreach (var client in clients)
 				{
-					client.Emit("msg", new { msg = msg });
+					client.Emit("broadcast", new { Message = msg });
 				}
 			}
 		}
@@ -40,12 +34,21 @@ namespace Server
 		private static void Server_ClientAccepted(JsonClient client)
 		{
 			clients.Add(client);
+			Console.WriteLine($"Client connected ({client.Client.RemoteEndPoint})");
 			client.ClientDisconnected += Client_ClientDisconnected;
+			UpdateTitle();
 		}
 
-		private static void Client_ClientDisconnected(JsonClient e)
+		private static void Client_ClientDisconnected(JsonClient client)
 		{
-			clients.RemoveAll(c => c == e);
+			Console.WriteLine($"Client disconnected ({client.Client.RemoteEndPoint})");
+			clients.RemoveAll(c => c == client);
+			UpdateTitle();
+		}
+
+		static void UpdateTitle()
+		{
+			Console.Title = $"Users connected: {clients.Count}";
 		}
 	}
 }
